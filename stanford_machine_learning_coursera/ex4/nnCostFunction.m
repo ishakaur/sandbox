@@ -62,29 +62,38 @@ Theta2_grad = zeros(size(Theta2));
 %               and Theta2_grad from Part 2.
 %
 
+A1 = [ones(m, 1) X];
+A2 = sigmoid(A1 * Theta1');
+A2 = [ones(m, 1) A2];
+A3 = sigmoid(A2 * Theta2');
 
+vec_y = zeros(m, num_labels);
+for row = 1:m
+    vec_y(row, y(row)) = 1;
+end
 
+J = mean(sum(-vec_y .* log(A3) - (1 - vec_y) .* log(1 - A3), 2));
+J = J + lambda * (sum(sum(Theta1(:, 2:end) .^ 2)) + sum(sum(Theta2(:, 2:end) .^ 2))) / (2 * m);
 
+d3 = A3 - vec_y;
+d2 = (d3 * Theta2) .* (A2 .* (1 - A2));
+d2 = d2(:, 2:end);
 
+D2 = (d3' * A2) ./ m;
+Theta2_grad = D2 + ((lambda/m) .* Theta2);
+Theta2_grad = [D2(:, 1) Theta2_grad(:, 2:end)];
 
-
-
-
-
-
-
-
-
-
-
-
-
+D1 = (d2' * A1) ./ m;
+Theta1_grad = D1 + ((lambda/m) .* Theta1);
+Theta1_grad = [D1(:, 1) Theta1_grad(:, 2:end)];
 
 % -------------------------------------------------------------
 
 % =========================================================================
 
 % Unroll gradients
+
+
 grad = [Theta1_grad(:) ; Theta2_grad(:)];
 
 
