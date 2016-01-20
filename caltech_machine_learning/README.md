@@ -6,4 +6,4 @@ This folder contains the iPython notebooks that I used to work through the [home
 
 Do feel free to use the material here, but if you are doing the course, then try to work through the problems on your own before you look at the solutions in here. The [class forums](http://book.caltech.edu/bookforum/forumdisplay.php?f=129) are also a good place to find discussion about the material if you get stuck.
 
-I also wrote a [comparative review](https://medium.com/@ishakaursomani) of this course and Professor Andrew Ng's Machine learning course on Coursera.
+I also wrote a [comparative review](https://medium.com/@ishakaursomani) of this course and [Prof Andrew Ng's Machine Learning course](https://www.coursera.org/learn/machine-learning).
