@@ -3,3 +3,4 @@
 .ipynb_checkpoints
 token.mat
 enronemails/data/
+*.pyc
