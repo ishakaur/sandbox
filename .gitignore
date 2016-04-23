@@ -2,5 +2,5 @@
 .metadata
 .ipynb_checkpoints
 token.mat
-enron_emails_analysis/data/
+enron_email_analysis/data/
 *.pyc
