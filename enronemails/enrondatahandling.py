@@ -7,43 +7,49 @@ import pytz
 import re
 import os
 import pandas as pd
+from sklearn.feature_extraction.text import TfidfTransformer
 
 class EnronEmailParser:
     '''
-    Parser for the emails included in the Enron Email Dataset available at
+    Parser for the emails included in the Enron E    mail Dataset available at
     http://bailando.sims.berkeley.edu/enron/enron_with_categories.tar.gz
     '''
     EMAIL_REGEX = re.compile(r"^[^@]+@[^@]+\.[^@]+$")
-    EPOCH = datetime.datetime.utcfromtimestamp(0).replace(tzinfo = pytz.utc)
+    EPOCH = datetime.datetime.utcfromtimestamp(0).replace(tzinfo=pytz.utc)
 
     def __init__(self, filename, verbose=False):
         self.filename = filename
-        self.ts = None
         self.dt = None
+        self.ts = None
+        self.tz = None
         self.sender = None
-        self.recipients = None
         self.subject = None
+        self.tos = None
+        self.ccs = None
+        self.bccs = None
+        self.num_tos = None
+        self.num_ccs = None
+        self.num_bccs = None
         self.num_recipients = None
         self.num_lines_in_msg = None
-        self.json_repr = None
+        self.str_repr = None
         self.parse()
         if verbose:
             print self.__str__()
 
-    def to_json(self):
-        if not self.json_repr:
-            self.json_repr = {
-                'filename' : self.filename,
+    def __str__(self):
+        if not self.str_repr:
+            self.str_repr = json.dumps({
+                'filename': self.filename,
                 'ts': self.ts,
                 'sender': self.sender,
-                'recipients': list(self.recipients),
+                'tos': list(self.tos),
+                'ccs': list(self.ccs),
+                'bccs': list(self.bccs),
                 'subject': self.subject,
                 'num_lines_in_msg': self.num_lines_in_msg
-            }
-        return self.json_repr
-
-    def __str__(self):
-        return json.dumps(self.to_json())
+            })
+        return self.str_repr
 
     def check_prefix(self, line, prefix):
         '''
@@ -53,7 +59,7 @@ class EnronEmailParser:
             raise ValueError('Line invalid in {}, needs prefix "{}": {}'.format(self.filename, prefix, line))
         return line[len(prefix)+1:].strip()
 
-    def parse_recipients(self, filehandle, prefix, line=None):
+    def parse_recipients(self, filehandle, prefix, recipient_set, line=None):
         '''
         Parse the recipient email addresses (To: Cc: and Bcc:)
 
@@ -70,7 +76,7 @@ class EnronEmailParser:
                     raise ValueError('Invalid recipient address {} found in: "{}"'.format(recipient, line))
                 recipient = recipient.strip()
                 if recipient != self.sender:
-                    self.recipients.add(recipient.strip())
+                    recipient_set.add(recipient.strip())
             line = filehandle.readline().strip() if line.endswith(',') else None
         return None
 
@@ -86,30 +92,28 @@ class EnronEmailParser:
             # Read date and time
             self.dt = dateutil.parser.parse(self.check_prefix(f.readline().strip(), "Date:"))
             self.ts = (self.dt - self.EPOCH).total_seconds()
+            self.tz = self.dt.tzinfo
 
             # Read sender
             self.sender = self.check_prefix(f.readline().strip(), "From:")
             if not self.EMAIL_REGEX.match(self.sender):
                 raise ValueError('Invalid sender address found: {}'.format(self.sender))
 
-            # Assume all recipients in the to:, cc:, bcc: lists are equivalent.
-            self.recipients = set()
-
             # To addresses, if any
-            unprocessed_line = self.parse_recipients(f, "To:")
+            self.tos = set()
+            unprocessed_line = self.parse_recipients(f, "To:", self.tos)
 
-            # Subject
+            # Subject, also handle case for multi-line subject
             subjectline = unprocessed_line if unprocessed_line else f.readline().strip()
             self.subject = self.check_prefix(subjectline, "Subject:")
-
-            # Handle case for mulitiline subject
             line = f.readline().strip()
             while not line.startswith('Cc:') and not line.startswith('Mime-Version'):
                 self.subject = self.subject + line
                 line = f.readline().strip()
 
             # Cc addreses, if any
-            unprocessed_line = self.parse_recipients(f, "Cc:", line)
+            self.ccs = set()
+            unprocessed_line = self.parse_recipients(f, "Cc:", self.ccs, line)
 
             # Mime version - ignore
             line = unprocessed_line if unprocessed_line else f.readline()
@@ -124,10 +128,16 @@ class EnronEmailParser:
             self.check_prefix(line, 'Content-Transfer-Encoding')
 
             # Bcc addresses, if any
-            unprocessed_line = self.parse_recipients(f, "Bcc:")
+            self.bccs = set()
+            unprocessed_line = self.parse_recipients(f, "Bcc:", self.bccs)
 
             # Total number of recipients
-            self.num_recipients = len(self.recipients)
+            self.ccs = self.ccs - self.tos
+            self.bccs = self.bccs - self.ccs - self.tos
+            self.num_tos = len(self.tos)
+            self.num_ccs = len(self.ccs)
+            self.num_bccs = len(self.bccs)
+            self.num_recipients = self.num_tos + self.num_ccs + self.num_bccs
 
             # Read till the header is done, no need to do verification of X- fields at this point
             line = unprocessed_line if unprocessed_line else f.readline().strip()
@@ -139,8 +149,6 @@ class EnronEmailParser:
             for _ in f:
                 self.num_lines_in_msg += 1
 
-            # Not saving it for the time being
-            #message = '\n'.join([line.strip() for line in f])
 
 
 class EnronEmailDataset:
@@ -158,8 +166,10 @@ class EnronEmailDataset:
         self.email_files = []
         self.emails = None
         self.recipients = None
+        self.corpus = []
         self.survey()
         self.parse()
+        self.find_responses()
 
     def survey(self):
         '''
@@ -184,17 +194,65 @@ class EnronEmailDataset:
         recipients = []
         for email_file in self.email_files:
             parsed_email = EnronEmailParser(email_file)
-            emails[parsed_email.filename]=(parsed_email.ts,
-                                           parsed_email.dt,
-                                           parsed_email.sender,
-                                           parsed_email.num_recipients,
-                                           parsed_email.subject,
-                                           parsed_email.num_lines_in_msg)
-            for recipient in parsed_email.recipients:
-                recipients.append((parsed_email.filename, recipient))
+            emails[parsed_email.filename]=(
+                parsed_email.filename,
+                parsed_email.dt,
+                parsed_email.ts,
+                parsed_email.tz,
+                parsed_email.sender,
+                parsed_email.num_tos,
+                parsed_email.num_ccs,
+                parsed_email.num_bccs,
+                parsed_email.num_recipients,
+                parsed_email.subject,
+                parsed_email.num_lines_in_msg
+            )
+            for recipient in parsed_email.tos:
+                recipients.append((parsed_email.filename, recipient, 'to'))
+            for recipient in parsed_email.ccs:
+                recipients.append((parsed_email.filename, recipient, 'cc'))
+            for recipient in parsed_email.bccs:
+                recipients.append((parsed_email.filename, recipient, 'bcc'))
         self.emails = pd.DataFrame.from_dict(emails, orient='index')
         self.emails.index.name = 'email_id'
-        self.emails.columns = ['ts', 'datetime', 'sender', 'num_recipients', 'subject', 'num_lines_in_msg']
+        self.emails.columns = ['email_id', 'datetime', 'ts', 'tz', 'sender', 'num_tos', 'num_ccs', 'num_bccs', 'num_recipients', 'subject', 'num_lines_in_msg']
         self.recipients = pd.DataFrame.from_records(recipients)
-        self.recipients.columns = ['email_id', 'recipient']
+        self.recipients.columns = ['email_id', 'recipient', 'type']
         print 'Parsed {} emails'.format(len(emails))
+
+    def find_responses(self):
+        # Nested joins to find all emails to which an email can be a potential response
+        intermediate = pd.merge(
+            self.emails,
+            self.recipients,
+            left_on='sender',
+            right_on='recipient',
+            suffixes=['_response', '_original']
+        )
+        intermediate = intermediate.rename(columns={'type':'recipient_type_in_original_message'})
+        del intermediate['recipient']
+
+        self.responses = pd.merge(
+            intermediate,
+            self.emails,
+            left_on='email_id_original',
+            right_index=True,
+            suffixes=['_response', '']
+        )
+        del self.responses['email_id_original']
+
+        # Apply conditions
+        self.responses['lowercase_subject'] = self.responses.subject.apply(lambda value: value.lower())
+        self.responses['response_time_in_secs'] = self.responses['ts_response'] - self.responses['ts']
+        self.responses = self.responses[
+            (self.responses.lowercase_subject != '')
+            & (self.responses.lowercase_subject != 're:')
+            & (self.responses.lowercase_subject != 'fwd:')
+            & (self.responses.response_time_in_secs > 0)]
+        self.responses = self.responses[self.responses.apply(lambda row: row['subject'] in row['subject_response'], axis=1)]
+        del self.responses['lowercase_subject']
+
+        # Pick the shortest response time for each email
+        self.responses = self.responses.sort_values(by=['response_time_in_secs'], ascending=[1])
+        self.responses = self.responses.groupby(['email_id_response'], as_index=False).first().sort_values(by='response_time_in_secs', ascending=[1])
+        print "Found {} responses".format(len(self.responses))
